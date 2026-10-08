@@ -1,0 +1,12 @@
+Here are the details for the inventory table.
+
+The inventory table tracks how many units of each product are on hand in each warehouse.
+
+inventory_id is the unique identifier for each inventory record.
+product_id is a foreign key that links each row to the products table.
+warehouse_code is a categorical column, and it only accepts two values: WH-EAST and WH-WEST. There is no check constraint or foreign key enforcing this, so occasionally a stray value like WH-CENTRAL can slip in.
+quantity_on_hand is the number of units currently in stock at that warehouse.
+reorder_level is the threshold that triggers a restock order when quantity on hand drops below it.
+updated_at is the timestamp of the last inventory update.
+
+Now a couple of deeper notes. quantity_on_hand can go negative when we oversell, and a negative value represents a backorder. Our restock policy is to place a purchase order whenever quantity on hand falls below reorder_level plus a safety buffer of ten units. And warehouse_code is case sensitive, so be careful: wh-east with lowercase letters would actually be treated as a different, invalid value.

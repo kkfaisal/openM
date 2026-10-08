@@ -1,0 +1,45 @@
+# MetaLens — Docker Compose.
+#
+# Runs the FastAPI backend + built React frontend. The MVP uses SQLite, so no
+# external database is required; swap DATABASE_URL to a Postgres URL to use
+# PostgreSQL (add a `postgres` service and uncomment below if desired).
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: sqlite:////data/metadata_steward.db
+      CATALOG_BACKEND: demo
+      LLM_PROVIDER: heuristic
+      CORS_ORIGINS: http://localhost:5173,http://localhost:8080
+      # OPENMETADATA_HOST: ${OPENMETADATA_HOST:-}
+      # OPENMETADATA_JWT: ${OPENMETADATA_JWT:-}
+      # LLM_PROVIDER: openai
+      # OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - steward-data:/data
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+  # Optional PostgreSQL (enable if DATABASE_URL points to Postgres):
+  # postgres:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     POSTGRES_USER: steward
+  #     POSTGRES_PASSWORD: steward
+  #     POSTGRES_DB: metadata_steward
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pg-data:/var/lib/postgresql/data
+
+volumes:
+  steward-data:
+  # pg-data:
