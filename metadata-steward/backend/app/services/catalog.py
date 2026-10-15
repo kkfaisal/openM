@@ -32,9 +32,12 @@ def _using_om() -> bool:
     return settings.catalog_backend == "openmetadata"
 
 
-def _om_client():
-    from .openmetadata_client import get_client
+def _om_client(table: CatalogTable):
+    """The OpenMetadata instance that owns this table."""
+    from .openmetadata_client import client_for_tool, get_client
 
+    if table.tool is not None and table.tool.type == "openmetadata":
+        return client_for_tool(table.tool)
     return get_client()
 
 
@@ -142,7 +145,7 @@ def update_description(
     applied_by: str = "steward",
 ) -> MetadataChange:
     if _using_om():
-        _om_client().update_table_description(table.fqn, value)
+        _om_client(table).update_table_description(table.fqn, value)
     old = table.description
     table.description = value
     return _record_change(
@@ -165,7 +168,7 @@ def update_owner(
     applied_by: str = "steward",
 ) -> MetadataChange:
     if _using_om():
-        _om_client().update_table_owner(table.fqn, team_name)
+        _om_client(table).update_table_owner(table.fqn, team_name)
     team = db.query(CatalogTeam).filter(CatalogTeam.name == team_name).first()
     if team is None:
         team = CatalogTeam(name=team_name)
@@ -193,7 +196,7 @@ def update_domain(
     applied_by: str = "steward",
 ) -> MetadataChange:
     if _using_om():
-        _om_client().update_table_domain(table.fqn, domain)
+        _om_client(table).update_table_domain(table.fqn, domain)
     dom = db.query(CatalogDomain).filter(CatalogDomain.name == domain).first()
     old = domain_name(db, table)
     if dom is None:
@@ -222,7 +225,7 @@ def update_column_classification(
     applied_by: str = "steward",
 ) -> MetadataChange:
     if _using_om():
-        _om_client().update_column_tag(table.fqn, column.name, value)
+        _om_client(table).update_column_tag(table.fqn, column.name, value)
     old = column.classification
     column.classification = value
     return _record_change(
@@ -246,7 +249,7 @@ def update_column_description(
     applied_by: str = "steward",
 ) -> MetadataChange:
     if _using_om():
-        _om_client().update_column_description(table.fqn, column.name, value)
+        _om_client(table).update_column_description(table.fqn, column.name, value)
     old = column.description
     column.description = value
     return _record_change(

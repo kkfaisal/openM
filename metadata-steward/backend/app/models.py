@@ -22,6 +22,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -58,6 +59,40 @@ class MetadataTool(Base):
     )
 
     tables: Mapped[list["CatalogTable"]] = relationship(back_populates="tool")
+    datasets: Mapped[list["ToolDataset"]] = relationship(
+        back_populates="tool", cascade="all, delete-orphan"
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ToolDataset(Base):
+    """An OpenMetadata database imported into MetaLens as a dataset.
+
+    The dataset key (``service.database``) is what findings, ingestions and the
+    RAG index are attached to. ``schemas`` optionally limits the sync to some
+    schemas; empty means all.
+    """
+
+    __tablename__ = "tool_datasets"
+    __table_args__ = (UniqueConstraint("tool_id", "dataset_key", name="uq_tool_dataset"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    tool_id: Mapped[str] = mapped_column(
+        ForeignKey("metadata_tools.id", ondelete="CASCADE"), index=True
+    )
+    service_name: Mapped[str] = mapped_column(String(256))
+    database_name: Mapped[str] = mapped_column(String(256))
+    dataset_key: Mapped[str] = mapped_column(String(512), index=True)
+    display_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    schemas: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(16), default="PENDING")  # PENDING | SYNCED | ERROR
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    table_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    tool: Mapped["MetadataTool"] = relationship(back_populates="datasets")
 
 
 class CatalogDomain(Base):
@@ -207,6 +242,7 @@ class Recommendation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     policy_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     context_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -274,6 +310,7 @@ class AgentRun(Base):
     steps: Mapped[list] = mapped_column(JSON, default=list)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     result_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
 
 class Policy(Base):

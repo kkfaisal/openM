@@ -1,45 +1,95 @@
-# MetaLens — Docker Compose.
+# MetaLens: production-style stack.
 #
-# Runs the FastAPI backend + built React frontend. The MVP uses SQLite, so no
-# external database is required; swap DATABASE_URL to a Postgres URL to use
-# PostgreSQL (add a `postgres` service and uncomment below if desired).
+#   frontend  :8080  React app (nginx), proxies /api to the backend
+#   backend   :8001  FastAPI steward (talks to your OpenMetadata)
+#   postgres         steward state (findings, approvals, audit, ...)
+#   qdrant    :6333  vector store for the RAG knowledge base
+#   mlflow    :5000  agent traces, human feedback, evaluation runs
+#
+# Required: METALENS_SECRET_KEY (Fernet key, encrypts connection credentials):
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# OpenMetadata connections are added in the UI (Metadata Tools → Connect a tool).
 
 services:
   backend:
     build: ./backend
+    restart: unless-stopped
     ports:
       - "8001:8001"
     environment:
-      DATABASE_URL: sqlite:////data/metadata_steward.db
-      CATALOG_BACKEND: demo
-      LLM_PROVIDER: heuristic
-      CORS_ORIGINS: http://localhost:5173,http://localhost:8080
-      # OPENMETADATA_HOST: ${OPENMETADATA_HOST:-}
-      # OPENMETADATA_JWT: ${OPENMETADATA_JWT:-}
-      # LLM_PROVIDER: openai
-      # OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DATABASE_URL: postgresql+psycopg://metalens:${POSTGRES_PASSWORD:-metalens}@postgres:5432/metalens
+      METALENS_SECRET_KEY: ${METALENS_SECRET_KEY:?set METALENS_SECRET_KEY}
+      CATALOG_BACKEND: openmetadata
+      BOOTSTRAP_DEMO_DATA: "false"
+      OPENMETADATA_HOST: ${OPENMETADATA_HOST:-}
+      OPENMETADATA_JWT: ${OPENMETADATA_JWT:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      QDRANT_URL: http://qdrant:6333
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_UI_URL: ${MLFLOW_UI_URL:-http://localhost:5000}
+      CORS_ORIGINS: http://localhost:8080
     volumes:
       - steward-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      mlflow:
+        condition: service_started
 
   frontend:
     build: ./frontend
+    restart: unless-stopped
     ports:
       - "8080:80"
     depends_on:
       - backend
 
-  # Optional PostgreSQL (enable if DATABASE_URL points to Postgres):
-  # postgres:
-  #   image: postgres:16-alpine
-  #   environment:
-  #     POSTGRES_USER: steward
-  #     POSTGRES_PASSWORD: steward
-  #     POSTGRES_DB: metadata_steward
-  #   ports:
-  #     - "5432:5432"
-  #   volumes:
-  #     - pg-data:/var/lib/postgresql/data
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: metalens
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-metalens}
+      POSTGRES_DB: metalens
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./infra/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metalens"]
+      interval: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.4
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.17.1
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    command: >
+      sh -c "pip install --quiet psycopg2-binary &&
+             mlflow server --host 0.0.0.0 --port 5000
+             --backend-store-uri postgresql://metalens:${POSTGRES_PASSWORD:-metalens}@postgres:5432/mlflow
+             --artifacts-destination /mlflow/artifacts
+             --allowed-hosts mlflow:5000,localhost:5000,127.0.0.1:5000"
+    volumes:
+      - mlflow-artifacts:/mlflow/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   steward-data:
-  # pg-data:
+  pg-data:
+  qdrant-data:
+  mlflow-artifacts:

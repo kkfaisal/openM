@@ -25,23 +25,37 @@ class OpenMetadataClient:
         base_url: str | None = None,
         email: str | None = None,
         password: str | None = None,
+        *,
+        jwt: str | None = None,
+        verify_ssl: bool = True,
+        timeout: float = 60,
     ) -> None:
         self.base_url = (base_url or settings.openmetadata_host or "").rstrip("/")
         if not self.base_url:
-            raise OpenMetadataError("OPENMETADATA_HOST is not configured.")
+            raise OpenMetadataError("OpenMetadata host is not configured.")
+        # A bot JWT (recommended for production) takes precedence over login.
+        self.jwt = jwt if jwt is not None else settings.openmetadata_jwt
         self.email = email or settings.openmetadata_email or "admin@open-metadata.org"
         self.password = password or settings.openmetadata_password or "admin"
+        self.verify_ssl = verify_ssl
+        self.timeout = timeout
         self._token: str | None = None
         self._expiry: float = 0.0
 
     # -- auth -------------------------------------------------------------- #
     def _login(self) -> str:
         encoded = base64.b64encode(self.password.encode()).decode()
-        resp = httpx.post(
-            f"{self.base_url}/api/v1/users/login",
-            json={"email": self.email, "password": encoded},
-            timeout=30,
-        )
+        try:
+            resp = httpx.post(
+                f"{self.base_url}/api/v1/users/login",
+                json={"email": self.email, "password": encoded},
+                timeout=30,
+                verify=self.verify_ssl,
+            )
+        except httpx.HTTPError as e:
+            raise OpenMetadataError(f"Cannot reach {self.base_url}: {e}") from e
+        if resp.status_code in (401, 403):
+            raise OpenMetadataError("Login failed: check the email and password.")
         data = self._check(resp)
         token = data.get("accessToken")
         if not token:
@@ -52,6 +66,8 @@ class OpenMetadataClient:
         return token
 
     def _ensure_token(self) -> str:
+        if self.jwt:
+            return self.jwt
         if not self._token or time.time() > self._expiry - 60:
             return self._login()
         return self._token
@@ -91,11 +107,19 @@ class OpenMetadataClient:
         }
         try:
             resp = httpx.request(
-                method, url, headers=headers, json=json, params=params, timeout=60
+                method,
+                url,
+                headers=headers,
+                json=json,
+                params=params,
+                timeout=self.timeout,
+                verify=self.verify_ssl,
             )
         except httpx.HTTPError as e:
-            raise OpenMetadataError(str(e)) from e
+            raise OpenMetadataError(f"Cannot reach {self.base_url}: {e}") from e
 
+        if resp.status_code == 401 and self.jwt:
+            raise OpenMetadataError("The bot token was rejected (401). Generate a new token in OpenMetadata.")
         if resp.status_code == 401 and retry:
             # Token expired — re-login once and retry.
             self._login()
@@ -104,10 +128,48 @@ class OpenMetadataClient:
 
     # -- generic helpers --------------------------------------------------- #
     def list_all(self, entity: str, params: dict | None = None) -> list[dict]:
+        """Every entity of a type, following OpenMetadata's cursor paging."""
+        return list(self.iter_all(entity, params))
+
+    def iter_all(self, entity: str, params: dict | None = None, page_size: int = 200):
         params = dict(params or {})
-        params.setdefault("limit", 1000)
-        data = self._request("GET", f"/api/v1/{entity}", params=params)
-        return data.get("data", []) if isinstance(data, dict) else data
+        params["limit"] = min(int(params.get("limit", page_size)), 1000)
+        while True:
+            data = self._request("GET", f"/api/v1/{entity}", params=params)
+            if not isinstance(data, dict):
+                yield from data or []
+                return
+            yield from data.get("data", [])
+            after = (data.get("paging") or {}).get("after")
+            if not after:
+                return
+            params["after"] = after
+
+    def version(self) -> dict:
+        """Server version; also proves the credentials work (it needs auth)."""
+        info = self._request("GET", "/api/v1/system/version")
+        # /system/version is public on some builds; touch an authed endpoint.
+        self._request("GET", "/api/v1/services/databaseServices", params={"limit": 1})
+        return info
+
+    # -- browse (connect wizard) ------------------------------------------- #
+    def list_database_services(self) -> list[dict]:
+        return self.list_all("services/databaseServices")
+
+    def list_databases(self, service: str) -> list[dict]:
+        return self.list_all("databases", params={"service": service})
+
+    def list_schemas(self, database_fqn: str) -> list[dict]:
+        return self.list_all("databaseSchemas", params={"database": database_fqn})
+
+    def count_tables(self, *, database_fqn: str | None = None, schema_fqn: str | None = None) -> int:
+        params: dict = {"limit": 1}
+        if schema_fqn:
+            params["databaseSchema"] = schema_fqn
+        elif database_fqn:
+            params["database"] = database_fqn
+        data = self._request("GET", "/api/v1/tables", params=params)
+        return int((data.get("paging") or {}).get("total") or 0)
 
     def get_by_name(self, entity: str, fqn: str) -> dict | None:
         try:
@@ -126,10 +188,20 @@ class OpenMetadataClient:
         return self.get_by_name(entity, fqn) is not None
 
     # -- read entities ----------------------------------------------------- #
-    def list_tables(self) -> list[dict]:
-        return self.list_all(
-            "tables", params={"fields": "columns,owners,domains,tags,databaseSchema"}
-        )
+    TABLE_FIELDS = "columns,owners,domains,tags,databaseSchema"
+
+    def list_tables(
+        self,
+        *,
+        database_fqn: str | None = None,
+        schema_fqn: str | None = None,
+    ) -> list[dict]:
+        params: dict = {"fields": self.TABLE_FIELDS}
+        if schema_fqn:
+            params["databaseSchema"] = schema_fqn
+        elif database_fqn:
+            params["database"] = database_fqn
+        return self.list_all("tables", params=params)
 
     def list_domains(self) -> list[dict]:
         return self.list_all("domains")
@@ -380,16 +452,55 @@ class OpenMetadataClient:
 
 
 _client: OpenMetadataClient | None = None
+_tool_clients: dict[str, tuple[object, OpenMetadataClient]] = {}
 
 
 def get_client() -> OpenMetadataClient:
-    """Lazily construct a shared client."""
+    """Client for the env-configured OpenMetadata (bootstrap / legacy)."""
     global _client
     if _client is None:
         _client = OpenMetadataClient()
     return _client
 
 
-def reset_client() -> None:
+def client_from_config(host: str, config: dict) -> OpenMetadataClient:
+    """Build a client from a tool's host + (encrypted) auth config."""
+    from .secrets import decrypt
+
+    auth = (config or {}).get("auth") or {}
+    verify = bool((config or {}).get("verify_ssl", True))
+    if auth.get("type") == "jwt":
+        token = decrypt(auth.get("token_enc"))
+        if not token:
+            raise OpenMetadataError("No usable bot token stored for this connection.")
+        return OpenMetadataClient(host, jwt=token, verify_ssl=verify)
+    if auth.get("type") == "basic":
+        return OpenMetadataClient(
+            host,
+            email=auth.get("email"),
+            password=decrypt(auth.get("password_enc")) or "",
+            jwt="",
+            verify_ssl=verify,
+        )
+    # No stored auth: fall back to the env credentials (default tool).
+    return OpenMetadataClient(host)
+
+
+def client_for_tool(tool) -> OpenMetadataClient:  # noqa: ANN001
+    """Cached client per tool, rebuilt when the tool's settings change."""
+    stamp = (tool.host, tool.updated_at)
+    cached = _tool_clients.get(tool.id)
+    if cached and cached[0] == stamp:
+        return cached[1]
+    client = client_from_config(tool.host or "", tool.config or {})
+    _tool_clients[tool.id] = (stamp, client)
+    return client
+
+
+def reset_client(tool_id: str | None = None) -> None:
     global _client
-    _client = None
+    if tool_id:
+        _tool_clients.pop(tool_id, None)
+    else:
+        _client = None
+        _tool_clients.clear()

@@ -6,6 +6,7 @@ import {
   ActionModeBadge,
   ConfidenceBar,
   EmptyState,
+  EntityName,
   FieldBadge,
   Loading,
   StatusBadge,
@@ -95,7 +96,9 @@ export default function Recommendations() {
                   <td>
                     <FieldBadge field={fieldLabel(r.field)} />
                   </td>
-                  <td className="mono">{entityMap.get(r.finding_id) ?? r.finding_id}</td>
+                  <td>
+                    <EntityName fqn={entityMap.get(r.finding_id) ?? r.finding_id} />
+                  </td>
                   <td style={{ maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {r.new_value}
                   </td>

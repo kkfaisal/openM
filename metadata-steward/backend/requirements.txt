@@ -4,5 +4,15 @@ sqlalchemy>=2.0,<3
 pydantic>=2.7,<3
 httpx>=0.27
 python-multipart>=0.0.9
+python-dotenv>=1.0
 openpyxl>=3.1
 faster-whisper>=1.0
+# Connection secrets encrypted at rest
+cryptography>=43
+# RAG knowledge base
+qdrant-client>=1.12
+fastembed>=0.5
+# Agent tracing, feedback and evaluation
+mlflow>=3.17,<4
+pandas>=2.2
+psycopg[binary]>=3.2

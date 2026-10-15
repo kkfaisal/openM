@@ -68,6 +68,14 @@ def _migrate_sqlite() -> None:
             for name, ddl in additions.items():
                 if name not in existing:
                     conn.execute(text(f"ALTER TABLE metadata_sources ADD COLUMN {name} {ddl}"))
+        if "metadata_tools" in tables:
+            existing = {c["name"] for c in insp.get_columns("metadata_tools")}
+            for name, ddl in {"last_error": "TEXT", "last_checked_at": "DATETIME"}.items():
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE metadata_tools ADD COLUMN {name} {ddl}"))
+        for tbl in ("agent_runs", "recommendations"):
+            if tbl in tables and "trace_id" not in {c["name"] for c in insp.get_columns(tbl)}:
+                conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN trace_id VARCHAR(64)"))
         if "catalog_tables" in tables:
             existing = {c["name"] for c in insp.get_columns("catalog_tables")}
             if "tool_id" not in existing:

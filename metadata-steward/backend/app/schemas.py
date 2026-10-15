@@ -119,6 +119,7 @@ class RecommendationOut(ORMModel):
     policy_id: str | None
     version: int
     context_snapshot: str | None
+    trace_id: str | None = None
     evidence: list[EvidenceOut] = []
 
 
@@ -182,6 +183,7 @@ class AgentRunOut(ORMModel):
     steps: list
     summary: str | None
     result_json: dict | None
+    trace_id: str | None = None
 
 
 # ---- Policies ----
@@ -451,15 +453,51 @@ class WebhookIngestRequest(BaseModel):
 
 
 # ---- Metadata tools (connections) ----
+class ToolAuth(BaseModel):
+    """Credentials as entered in the UI. Secrets are write-only: they are
+    encrypted on save and never returned by the API."""
+
+    type: str = "jwt"  # jwt | basic | none
+    token: str | None = None
+    email: str | None = None
+    password: str | None = None
+
+
+class ToolAuthOut(BaseModel):
+    type: str
+    email: str | None = None
+    token_hint: str | None = None
+    has_secret: bool = False
+
+
+class ToolDatasetOut(BaseModel):
+    id: str
+    tool_id: str
+    service_name: str
+    database_name: str
+    dataset_key: str
+    display_name: str | None
+    schemas: list[str]
+    status: str
+    error: str | None
+    table_count: int
+    last_synced_at: datetime | None
+    created_at: datetime
+
+
 class MetadataToolOut(BaseModel):
     id: str
     name: str
     type: str
     host: str | None
-    config: dict
+    auth: ToolAuthOut
+    verify_ssl: bool
     status: str
+    last_error: str | None
+    last_checked_at: datetime | None
     is_default: bool
     dataset_count: int
+    datasets: list[ToolDatasetOut]
     created_at: datetime
     updated_at: datetime
 
@@ -468,8 +506,76 @@ class ToolCreate(BaseModel):
     name: str
     type: str
     host: str | None = None
-    config: dict = {}
+    auth: ToolAuth | None = None
+    verify_ssl: bool = True
+    # Sample catalog for tools without a live connector (demo only).
     seed_demo: bool = False
+
+
+class ToolUpdate(BaseModel):
+    name: str | None = None
+    host: str | None = None
+    auth: ToolAuth | None = None
+    verify_ssl: bool | None = None
+
+
+class ToolTestRequest(BaseModel):
+    type: str = "openmetadata"
+    host: str
+    auth: ToolAuth | None = None
+    verify_ssl: bool = True
+    # When editing, reuse the stored secret if the form left it blank.
+    tool_id: str | None = None
+
+
+class ToolTestResult(BaseModel):
+    ok: bool
+    version: str | None = None
+    message: str
+    services: int | None = None
+
+
+class BrowseDatabase(BaseModel):
+    name: str
+    fqn: str
+    description: str | None = None
+    imported_by: str | None = None  # tool name if already imported
+    imported_here: bool = False
+
+
+class BrowseService(BaseModel):
+    name: str
+    service_type: str | None = None
+    databases: list[BrowseDatabase]
+
+
+class BrowseSchema(BaseModel):
+    name: str
+    fqn: str
+    table_count: int
+
+
+class DatasetImportItem(BaseModel):
+    service: str
+    database: str
+    display_name: str | None = None
+    schemas: list[str] = []
+
+
+class DatasetImportRequest(BaseModel):
+    datasets: list[DatasetImportItem]
+    run_detection: bool = True
+
+
+class DatasetImportResult(BaseModel):
+    imported: list[ToolDatasetOut]
+    errors: dict[str, str]
+    findings_created: int
+
+
+class ToolDatasetUpdate(BaseModel):
+    display_name: str | None = None
+    schemas: list[str] | None = None
 
 
 class SourceExtractResult(BaseModel):

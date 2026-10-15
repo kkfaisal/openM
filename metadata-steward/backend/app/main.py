@@ -17,6 +17,8 @@ from .api import (
     llm,
     overview,
     policies,
+    quality,
+    rag,
     recommendations,
     scans,
     settings as settings_router,
@@ -34,6 +36,9 @@ async def lifespan(app: FastAPI):
 
     scheduler.start()
     yield
+    from .services import rag
+
+    rag.close()
 
 
 app = FastAPI(
@@ -69,6 +74,8 @@ for router in (
     sources.router,
     tools.router,
     llm.router,
+    rag.router,
+    quality.router,
     settings_router.router,
 ):
     app.include_router(router)

@@ -50,3 +50,24 @@ export function pct(v: number): string {
 export function fieldLabel(field: string): string {
   return titleCase(field.replace("column.", "").replace(".classification", ""));
 }
+
+export function relTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
+  const s = Math.round((Date.now() - d.getTime()) / 1000);
+  if (s < 45) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const days = Math.round(h / 24);
+  if (days < 7) return `${days}d ago`;
+  return fmtDateShort(iso);
+}
+
+/** Pull FastAPI's `detail` message out of an API error, if present. */
+export function errorDetail(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  const m = raw.match(/"detail"\s*:\s*"([^"]+)"/);
+  return m ? m[1] : raw;
+}

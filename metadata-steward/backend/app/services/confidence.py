@@ -24,6 +24,8 @@ _WEIGHTS: dict[str, float] = {
     "UPSTREAM_LINEAGE": 0.08,
     "DOWNSTREAM_LINEAGE": 0.06,
     "SOURCE_EXTRACT": 0.10,
+    # Retrieved passages corroborate but are unverified raw text.
+    "RAG_PASSAGE": 0.05,
     "CONFLICT": -0.15,
 }
 

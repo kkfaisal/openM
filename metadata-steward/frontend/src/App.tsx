@@ -16,6 +16,8 @@ import Catalog from "./pages/Catalog";
 import Sources from "./pages/Sources";
 import SourceDetail from "./pages/SourceDetail";
 import Connections from "./pages/Connections";
+import Knowledge from "./pages/Knowledge";
+import Quality from "./pages/Quality";
 
 export default function App() {
   return (
@@ -38,6 +40,8 @@ export default function App() {
         <Route path="/sources" element={<Sources />} />
         <Route path="/sources/:id" element={<SourceDetail />} />
         <Route path="/connections" element={<Connections />} />
+        <Route path="/knowledge" element={<Knowledge />} />
+        <Route path="/quality" element={<Quality />} />
       </Route>
       </Routes>
     </>

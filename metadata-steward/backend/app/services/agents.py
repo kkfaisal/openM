@@ -111,11 +111,9 @@ def build_prompt_preview(
             if ctx and ctx.table_instructions.strip()
             else None
         )
-        facts_block = sources_service.facts_text(
-            sources_service.relevant_facts(
-                db, table=table, categories={"description", "general"}
-            )
-        )
+        facts_block = sources_service.knowledge(
+            db, table=table, categories={"description", "general"}
+        ).block
         return description_prompt(
             entity_fqn=table.fqn,
             entity_name=table.name,
@@ -137,12 +135,10 @@ def build_prompt_preview(
                 if ctx and ctx.column_instructions.strip()
                 else None
             )
-            facts_block = sources_service.facts_text(
-                sources_service.relevant_facts(
-                    db, table=table, column_name=col.name,
-                    categories={"description", "general"},
-                )
-            )
+            facts_block = sources_service.knowledge(
+                db, table=table, column_name=col.name,
+                categories={"description", "general"},
+            ).block
             return column_description_prompt(
                 column_name=col.name,
                 data_type=col.data_type,
@@ -159,12 +155,10 @@ def build_prompt_preview(
         if label is None:
             label = "PersonalData"
         neighbor = _neighboring_classification(db, table, col.name)
-        facts_block = sources_service.facts_text(
-            sources_service.relevant_facts(
-                db, table=table, column_name=col.name,
-                categories={"classification", "general"},
-            )
-        )
+        facts_block = sources_service.knowledge(
+            db, table=table, column_name=col.name,
+            categories={"classification", "general"},
+        ).block
         return classification_prompt(
             column_name=col.name,
             data_type=col.data_type,
@@ -252,13 +246,13 @@ def description_agent(
     # Extracted knowledge from connected sources (Slack/Teams/files).
     from . import sources as sources_service
 
-    src_facts = sources_service.relevant_facts(
+    kn = sources_service.knowledge(
         db, table=table, categories={"description", "general"}
     )
-    facts_block = sources_service.facts_text(src_facts)
+    src_facts, passages, facts_block = kn.facts, kn.passages, kn.block
     if facts_block:
         steps.append(
-            {"step": "Loaded source knowledge", "detail": f"{len(src_facts)} fact(s)", "ok": True}
+            {"step": "Loaded source knowledge", "detail": f"{len(src_facts)} fact(s), {len(passages)} retrieved passage(s)", "ok": True}
         )
 
     llm_context = context
@@ -336,6 +330,15 @@ def description_agent(
             evidence.attach(
                 db, type="SOURCE_EXTRACT", value=f.statement,
                 source=f.source.name, recommendation_id=recommendation.id,
+            )
+        )
+    for h in passages:
+        evs.append(
+            evidence.attach(
+                db, type="RAG_PASSAGE",
+                value=f"{h.text[:400]} (similarity {h.score:.2f})",
+                source=h.payload.get("source_name") or "knowledge base",
+                recommendation_id=recommendation.id,
             )
         )
     # Schema pattern: how many sibling tables already have descriptions?
@@ -426,13 +429,13 @@ def column_description_agent(
 
     from . import sources as sources_service
 
-    src_facts = sources_service.relevant_facts(
+    kn = sources_service.knowledge(
         db, table=table, column_name=column.name, categories={"description", "general"}
     )
-    facts_block = sources_service.facts_text(src_facts)
+    src_facts, passages, facts_block = kn.facts, kn.passages, kn.block
     if facts_block:
         steps.append(
-            {"step": "Loaded source knowledge", "detail": f"{len(src_facts)} fact(s)", "ok": True}
+            {"step": "Loaded source knowledge", "detail": f"{len(src_facts)} fact(s), {len(passages)} retrieved passage(s)", "ok": True}
         )
 
     llm_context = context
@@ -499,6 +502,15 @@ def column_description_agent(
             evidence.attach(
                 db, type="SOURCE_EXTRACT", value=f.statement,
                 source=f.source.name, recommendation_id=recommendation.id,
+            )
+        )
+    for h in passages:
+        evs.append(
+            evidence.attach(
+                db, type="RAG_PASSAGE",
+                value=f"{h.text[:400]} (similarity {h.score:.2f})",
+                source=h.payload.get("source_name") or "knowledge base",
+                recommendation_id=recommendation.id,
             )
         )
     recommendation.confidence = confidence.compute_confidence(
@@ -725,13 +737,13 @@ def classification_agent(
 
     from . import sources as sources_service
 
-    src_facts = sources_service.relevant_facts(
+    kn = sources_service.knowledge(
         db, table=table, column_name=column_name, categories={"classification", "general"}
     )
-    facts_block = sources_service.facts_text(src_facts)
-    if src_facts:
+    src_facts, passages, facts_block = kn.facts, kn.passages, kn.block
+    if src_facts or passages:
         steps.append(
-            {"step": "Loaded source knowledge", "detail": f"{len(src_facts)} fact(s)", "ok": True}
+            {"step": "Loaded source knowledge", "detail": f"{len(src_facts)} fact(s), {len(passages)} retrieved passage(s)", "ok": True}
         )
 
     llm = get_llm()
@@ -803,6 +815,15 @@ def classification_agent(
             evidence.attach(
                 db, type="SOURCE_EXTRACT", value=f.statement,
                 source=f.source.name, recommendation_id=recommendation.id,
+            )
+        )
+    for h in passages:
+        evs.append(
+            evidence.attach(
+                db, type="RAG_PASSAGE",
+                value=f"{h.text[:400]} (similarity {h.score:.2f})",
+                source=h.payload.get("source_name") or "knowledge base",
+                recommendation_id=recommendation.id,
             )
         )
 
@@ -939,8 +960,42 @@ def investigate(
         or 0
     )
 
-    recommendation = agent(db, finding, prompt_override=prompt_override)
-    recommendation.version = max_v + 1
+    from . import observability as obs
+
+    agent_name = agent.__name__.replace("_agent", "").title().replace("_", "") + "Agent"
+    started = _now()
+    with obs.span(f"investigate:{agent_name}", "AGENT", finding_type=finding.type) as span:
+        span.set_inputs(
+            {"finding_id": finding.id, "type": finding.type, "entity": finding.entity, "severity": finding.severity}
+        )
+        obs.tag_trace(
+            agent=agent_name,
+            finding_id=finding.id,
+            finding_type=finding.type,
+            entity=finding.entity,
+            dataset=".".join(finding.entity.split(".")[:2]),
+            prompt_override=bool(prompt_override),
+        )
+        recommendation = agent(db, finding, prompt_override=prompt_override)
+        recommendation.version = max_v + 1
+        span.set_outputs(
+            {
+                "recommendation_id": recommendation.id,
+                "field": recommendation.field,
+                "new_value": recommendation.new_value,
+                "confidence": recommendation.confidence,
+                "action_mode": recommendation.action_mode,
+                "evidence": [e.type for e in recommendation.evidence],
+            }
+        )
+        trace_id = getattr(span, "trace_id", None)
+    recommendation.trace_id = trace_id
+    # Record real latency + the trace link on the agent run(s) just created.
+    for obj in list(db.new) + list(db.dirty):
+        if isinstance(obj, AgentRun) and obj.finding_id == finding.id and obj.trace_id is None:
+            obj.started_at = started
+            obj.finished_at = _now()
+            obj.trace_id = trace_id
     db.flush()
 
     # Auto-apply safe, high-confidence recommendations immediately (unless the

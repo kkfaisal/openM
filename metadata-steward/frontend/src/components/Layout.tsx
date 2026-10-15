@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   Activity,
+  BookOpen,
   Bot,
   Cable,
   ChevronDown,
   ChevronRight,
   Database,
+  Gauge,
   History,
   Inbox,
   LayoutDashboard,
@@ -21,20 +23,49 @@ import {
 } from "lucide-react";
 import { api } from "../api";
 import type { Dataset } from "../types";
+import { useToast } from "./Toast";
 
-const NAV = [
-  { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
-  { to: "/findings", label: "Findings", icon: SearchCheck },
-  { to: "/recommendations", label: "Recommendations", icon: Lightbulb },
-  { to: "/approvals", label: "Approvals", icon: Inbox },
-  { to: "/sources", label: "Metadata Ingestions", icon: Cable },
-  { to: "/connections", label: "Metadata Tools", icon: Plug },
-  { to: "/agents", label: "Agents", icon: Bot },
-  { to: "/history", label: "Generation Log", icon: History },
-  { to: "/changes", label: "Changes", icon: Workflow },
-  { to: "/policies", label: "Policies", icon: ShieldCheck },
-  { to: "/activity", label: "Activity", icon: Activity },
-  { to: "/settings", label: "Settings", icon: Settings },
+type NavEntry = { to: string; label: string; icon: typeof Activity; end?: boolean };
+
+const NAV_GROUPS: { label: string | null; items: NavEntry[] }[] = [
+  {
+    label: null,
+    items: [{ to: "/", label: "Overview", icon: LayoutDashboard, end: true }],
+  },
+  {
+    label: "Review",
+    items: [
+      { to: "/approvals", label: "Approvals", icon: Inbox },
+      { to: "/findings", label: "Findings", icon: SearchCheck },
+      { to: "/recommendations", label: "Recommendations", icon: Lightbulb },
+    ],
+  },
+  {
+    label: "Knowledge",
+    items: [
+      { to: "/sources", label: "Metadata Ingestions", icon: Cable },
+      { to: "/knowledge", label: "Knowledge Base", icon: BookOpen },
+      { to: "/catalog", label: "Catalog", icon: Database },
+      { to: "/connections", label: "Metadata Tools", icon: Plug },
+    ],
+  },
+  {
+    label: "Audit trail",
+    items: [
+      { to: "/changes", label: "Changes", icon: Workflow },
+      { to: "/quality", label: "Agent Quality", icon: Gauge },
+      { to: "/agents", label: "Agent Runs", icon: Bot },
+      { to: "/history", label: "Generation Log", icon: History },
+      { to: "/activity", label: "Activity", icon: Activity },
+    ],
+  },
+  {
+    label: "Govern",
+    items: [
+      { to: "/policies", label: "Policies", icon: ShieldCheck },
+      { to: "/settings", label: "Settings", icon: Settings },
+    ],
+  },
 ];
 
 const TITLES: Record<string, { title: string; sub: string }> = {
@@ -59,19 +90,29 @@ const TITLES: Record<string, { title: string; sub: string }> = {
     title: "Metadata Tools",
     sub: "OpenMetadata, Amundsen, DataHub and more",
   },
-  "/agents": { title: "Agent Runs", sub: "Observable agent executions" },
+  "/agents": { title: "Agent Runs", sub: "Every agent investigation, step by step" },
   "/history": { title: "Generation Log", sub: "History of AI generations" },
   "/changes": { title: "Changes", sub: "Applied catalog writes with rollback" },
   "/policies": { title: "Policies", sub: "Deterministic guardrails for actions" },
   "/activity": { title: "Activity", sub: "Complete audit trail" },
   "/settings": { title: "Settings", sub: "System configuration" },
   "/catalog": { title: "Catalog", sub: "The metadata system of record" },
+  "/quality": {
+    title: "Agent Quality",
+    sub: "Monitoring and evaluation of the AI agents, traced in MLflow",
+  },
+  "/knowledge": {
+    title: "Knowledge Base",
+    sub: "Search, browse and ask questions over everything you ingested",
+  },
 };
 
 export default function Layout() {
   const location = useLocation();
-  const navigate = useNavigate();
+  const toast = useToast();
   const [pending, setPending] = useState<number | null>(null);
+  const [openFindings, setOpenFindings] = useState<number | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [scanning, setScanning] = useState(false);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [openDs, setOpenDs] = useState<string | null>(null);
@@ -79,33 +120,58 @@ export default function Layout() {
   useEffect(() => {
     api
       .overview()
-      .then((o) => setPending(o.pending_approvals))
+      .then((o) => {
+        setPending(o.pending_approvals);
+        setOpenFindings(o.open_findings);
+      })
       .catch(() => setPending(null));
     api
       .datasets()
       .then(setDatasets)
       .catch(() => setDatasets([]));
-  }, [location.pathname]);
+  }, [location.pathname, refreshKey]);
+
+  // Cards elsewhere fire this after a decision so the nav badges stay current.
+  useEffect(() => {
+    function refreshCounts() {
+      api
+        .overview()
+        .then((o) => {
+          setPending(o.pending_approvals);
+          setOpenFindings(o.open_findings);
+        })
+        .catch(() => {});
+    }
+    window.addEventListener("metalens:refresh-counts", refreshCounts);
+    return () => window.removeEventListener("metalens:refresh-counts", refreshCounts);
+  }, []);
 
   const meta =
     TITLES[location.pathname] ??
     (location.pathname.startsWith("/sources/")
       ? { title: "Source Detail", sub: "Connected metadata channel" }
+      : location.pathname.startsWith("/findings/")
+      ? { title: "Finding", sub: "Evidence, recommendations and decision history" }
       : TITLES["/"]);
 
   async function runScan() {
     setScanning(true);
     try {
-      await api.scan();
-      setPending((p) => (p === null ? p : p));
-      // refresh badge
-      const o = await api.overview();
-      setPending(o.pending_approvals);
-    } catch {
-      /* ignore */
+      const res = await api.scan();
+      const n = res.findings_created;
+      toast(
+        "success",
+        "Scan complete",
+        n > 0
+          ? `${n} new finding${n === 1 ? "" : "s"} detected — agents can now investigate.`
+          : "No new gaps found. Your catalog is up to date."
+      );
+    } catch (e) {
+      toast("error", "Scan failed", e instanceof Error ? e.message : String(e));
     } finally {
       setScanning(false);
-      navigate(0); // refresh current view
+      // Remount the current page so it refetches, without a full reload.
+      setRefreshKey((k) => k + 1);
     }
   }
 
@@ -123,33 +189,30 @@ export default function Layout() {
         </div>
 
         <nav className="nav">
-          <div className="nav-label">Workspace</div>
-          {NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                `nav-item${isActive ? " active" : ""}`
-              }
-            >
-              <item.icon />
-              <span>{item.label}</span>
-              {item.to === "/approvals" && pending ? (
-                <span className="nav-badge">{pending}</span>
-              ) : null}
-            </NavLink>
+          {NAV_GROUPS.map((group, gi) => (
+            <div key={gi} className="nav-group">
+              {group.label && <div className="nav-label">{group.label}</div>}
+              {group.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  className={({ isActive }) =>
+                    `nav-item${isActive ? " active" : ""}`
+                  }
+                >
+                  <item.icon />
+                  <span>{item.label}</span>
+                  {item.to === "/approvals" && pending ? (
+                    <span className="nav-badge">{pending}</span>
+                  ) : null}
+                  {item.to === "/findings" && openFindings ? (
+                    <span className="nav-badge nav-badge-soft">{openFindings}</span>
+                  ) : null}
+                </NavLink>
+              ))}
+            </div>
           ))}
-          <div className="nav-label">System of Record</div>
-          <NavLink
-            to="/catalog"
-            className={({ isActive }) =>
-              `nav-item${isActive ? " active" : ""}`
-            }
-          >
-            <Database />
-            <span>Catalog</span>
-          </NavLink>
 
           <div className="nav-label">Datasets</div>
           {datasets.length === 0 ? (
@@ -207,9 +270,14 @@ export default function Layout() {
               {scanning ? "Scanning…" : "Run scan"}
             </button>
           </div>
+          {scanning && (
+            <div className="topbar-progress">
+              <div className="progress-fill" />
+            </div>
+          )}
         </header>
         <main className="content">
-          <Outlet />
+          <Outlet key={refreshKey} />
         </main>
       </div>
     </div>

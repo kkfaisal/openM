@@ -12,11 +12,23 @@ import type {
   FindingDetail,
   HealthOut,
   MetadataChange,
+  BrowseSchema,
+  BrowseService,
+  DatasetImportResult,
   MetadataTool,
+  ToolDataset,
+  ToolTestResult,
   OverviewStats,
   Policy,
   PromptOverride,
   PromptPreview,
+  EvalJob,
+  EvalRun,
+  QualitySummary,
+  RagAnswer,
+  RagDatasetStat,
+  RagHit,
+  RagStatus,
   Recommendation,
   RegenerationResult,
   SettingOut,
@@ -37,6 +49,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(`${res.status} ${res.statusText}: ${body}`);
   }
   return res.json() as Promise<T>;
+}
+
+async function requestVoid(path: string, init?: RequestInit): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, init);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+  }
 }
 
 export const api = {
@@ -153,15 +173,37 @@ export const api = {
     }),
 
   tools: () => request<MetadataTool[]>("/tools"),
+  testTool: (body: Record<string, unknown>) =>
+    request<ToolTestResult>("/tools/test", { method: "POST", body: JSON.stringify(body) }),
   createTool: (body: Record<string, unknown>) =>
     request<MetadataTool>("/tools", { method: "POST", body: JSON.stringify(body) }),
-  deleteTool: async (id: string) => {
-    const res = await fetch(`${BASE}/tools/${id}`, { method: "DELETE" });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`${res.status} ${res.statusText}: ${body}`);
-    }
-  },
+  updateTool: (id: string, body: Record<string, unknown>) =>
+    request<MetadataTool>(`/tools/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  checkTool: (id: string) =>
+    request<ToolTestResult>(`/tools/${id}/check`, { method: "POST" }),
+  deleteTool: (id: string) => requestVoid(`/tools/${id}`, { method: "DELETE" }),
+  browseTool: (id: string) => request<BrowseService[]>(`/tools/${id}/browse`),
+  browseSchemas: (id: string, database: string) =>
+    request<BrowseSchema[]>(
+      `/tools/${id}/browse/schemas?${new URLSearchParams({ database })}`
+    ),
+  importDatasets: (
+    id: string,
+    datasets: { service: string; database: string; display_name?: string; schemas: string[] }[]
+  ) =>
+    request<DatasetImportResult>(`/tools/${id}/datasets`, {
+      method: "POST",
+      body: JSON.stringify({ datasets }),
+    }),
+  syncToolDataset: (id: string, dsId: string) =>
+    request<ToolDataset>(`/tools/${id}/datasets/${dsId}/sync`, { method: "POST" }),
+  updateToolDataset: (id: string, dsId: string, body: Record<string, unknown>) =>
+    request<ToolDataset>(`/tools/${id}/datasets/${dsId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  removeToolDataset: (id: string, dsId: string) =>
+    requestVoid(`/tools/${id}/datasets/${dsId}`, { method: "DELETE" }),
 
   settings: () => request<SettingOut[]>("/settings"),
   saveSetting: (key: string, value: unknown) =>
@@ -174,6 +216,33 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ api_key: apiKey }),
     }),
+
+  // ---- Agent quality (MLflow) ----
+  quality: (days = 30) => request<QualitySummary>(`/quality/summary?days=${days}`),
+  evalJobs: () => request<EvalJob[]>("/quality/evals/jobs"),
+  evalRuns: () =>
+    request<{ available: boolean; error?: string; runs: EvalRun[] }>("/quality/evals/runs"),
+  runEval: (suite: "golden" | "decisions", limit = 20) =>
+    request<EvalJob>(`/quality/evals/run?suite=${suite}&limit=${limit}`, { method: "POST" }),
+
+  // ---- Knowledge base (RAG) ----
+  ragStatus: () => request<RagStatus>("/rag/status"),
+  ragSources: () => request<RagDatasetStat[]>("/rag/sources"),
+  ragSearch: (params: Record<string, string>) =>
+    request<{ query: string; hits: RagHit[]; min_score_default: number }>(
+      `/rag/search?${new URLSearchParams(params)}`
+    ),
+  ragChunks: (params: Record<string, string>) =>
+    request<{ items: RagHit[]; next_offset: string | null }>(
+      `/rag/chunks?${new URLSearchParams(params)}`
+    ),
+  ragAsk: (body: { question: string; dataset_key?: string; source_id?: string }) =>
+    request<RagAnswer>("/rag/ask", { method: "POST", body: JSON.stringify(body) }),
+  ragReindex: (datasetKey?: string) =>
+    request<{ sources: number; chunks: number }>(
+      `/rag/reindex${datasetKey ? `?${new URLSearchParams({ dataset_key: datasetKey })}` : ""}`,
+      { method: "POST" }
+    ),
 
   // ---- Metadata sources (channels) ----
   datasetSources: (key: string) =>

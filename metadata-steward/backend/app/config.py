@@ -6,6 +6,14 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+
+try:  # Local development: read backend/.env if present (never overrides real env).
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+except ImportError:  # pragma: no cover
+    pass
 
 
 @dataclass

@@ -26,7 +26,9 @@ def run_scan(db: Session, *, investigate: bool = True) -> ScanRun:
     if settings.catalog_backend == "openmetadata":
         from . import sync
 
-        sync.sync_from_openmetadata(db)
+        # Per-dataset sync; connection errors are recorded on the dataset
+        # instead of failing the whole scan.
+        sync.sync_all(db)
         db.flush()
 
     created, scanned = findings.detect_findings(db)

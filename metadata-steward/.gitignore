@@ -22,3 +22,8 @@ dist/
 *.log
 .idea/
 .vscode/
+
+# Local runtime data (vector index, MLflow store, dev secret key)
+backend/data/
+backend/.metalens_secret_key
+*.ses

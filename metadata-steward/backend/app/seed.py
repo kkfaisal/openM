@@ -182,25 +182,73 @@ def _run_detection(db: Session) -> None:
 
 
 def _bootstrap_openmetadata(db: Session) -> None:
-    from .services import ecommerce, sync
-    from .services.openmetadata_client import get_client
+    """Startup for the OpenMetadata backend.
 
-    client = get_client()
-    # 1. Create the real Postgres ecommerce database (tables + data).
-    ecommerce.ensure_postgres_database()
-    # 2. Mirror it into OpenMetadata under a real Postgres service.
-    created = ecommerce.ingest(client)
-    # 3. Sync OpenMetadata -> local snapshot (scoped to the default tool).
+    * Always: make sure the default tool exists and flag legacy connections
+      that were saved without credentials (they were never really tested).
+    * Only with ``BOOTSTRAP_DEMO_DATA=true`` (the dev default): create the
+      sample Postgres ecommerce database, mirror it into OpenMetadata and
+      import it as a dataset of the default tool.
+
+    Startup never calls the LLM; agents run from scans or the UI.
+    """
+    import os
+
+    from .models import ToolDataset
+    from .services import ecommerce, findings, sync
+    from .services.openmetadata_client import OpenMetadataError, get_client
+
     tool = _ensure_default_tool(db)
-    synced = sync.sync_from_openmetadata(db, tool_id=tool.id)
-    _run_detection(db)
+    for t in db.query(MetadataTool).filter(MetadataTool.type == "openmetadata").all():
+        if not t.is_default and not (t.config or {}).get("auth") and t.status == "CONNECTED":
+            t.status = "UNVERIFIED"
+            t.last_error = "Saved without credentials. Edit the connection and test it."
+    db.flush()
+
+    sync.obsolete_orphans(db)
+
+    if os.getenv("BOOTSTRAP_DEMO_DATA", "true").lower() not in ("1", "true", "yes"):
+        db.commit()
+        return
+
+    try:
+        ecommerce.ensure_postgres_database()
+        created = ecommerce.ingest(get_client())
+    except Exception as e:  # noqa: BLE001 — demo data is best-effort
+        tool.status = "ERROR"
+        tool.last_error = f"Demo bootstrap failed: {e}"[:2000]
+        db.commit()
+        return
+
+    key = f"{ecommerce.SERVICE_NAME}.{ecommerce.POSTGRES_DB}"
+    ds = db.query(ToolDataset).filter(ToolDataset.dataset_key == key).first()
+    if ds is None:
+        ds = ToolDataset(
+            tool_id=tool.id,
+            service_name=ecommerce.SERVICE_NAME,
+            database_name=ecommerce.POSTGRES_DB,
+            dataset_key=key,
+            display_name="ecommerce",
+            schemas=[],
+        )
+        db.add(ds)
+        db.flush()
+    try:
+        synced = sync.sync_dataset(db, ds.tool, ds)
+    except OpenMetadataError as e:
+        ds.status = "ERROR"
+        ds.error = str(e)[:2000]
+        db.commit()
+        return
+    findings.detect_findings(db)
+    health.compute_health(db)
     audit.record(
         db,
         action="OPENMETADATA_INGEST_AND_SCAN",
         actor="system",
         actor_type="system",
         detail=(
-            f"Created Postgres ecommerce database and mirrored it into "
+            f"Demo bootstrap: mirrored the Postgres ecommerce database into "
             f"OpenMetadata (created={created}); synced {synced} tables and ran "
             f"detection."
         ),

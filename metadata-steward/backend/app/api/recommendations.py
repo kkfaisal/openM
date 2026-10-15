@@ -109,6 +109,17 @@ def _resolve(
 
     db.commit()
     db.refresh(rec)
+    from ..services import observability
+
+    observability.log_human_decision(
+        trace_id=rec.trace_id,
+        decision=decision,
+        decided_by=decided_by,
+        proposed=rec.new_value,
+        final=modified_value if modified_value is not None else rec.new_value,
+        comment=comment,
+        confidence=rec.confidence,
+    )
     return _to_out(rec)
 
 

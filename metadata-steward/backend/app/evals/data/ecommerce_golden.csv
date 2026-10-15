@@ -1,0 +1,60 @@
+table,column,data_type,description,classification
+customers,customer_id,INTEGER,"Unique customer identifier across all systems",Sensitive.CustomerIdentifier
+customers,first_name,VARCHAR,"Customer first name (PII)",PersonalData
+customers,last_name,VARCHAR,"Customer last name (PII)",PersonalData
+customers,email,VARCHAR,"Customer email address - PII and used as login. Must be unique.",Sensitive.Email
+customers,phone,VARCHAR,"Customer phone number - PII, may be null",Sensitive.PhoneNumber
+customers,address_line1,VARCHAR,"Primary street address - PII",Sensitive.Address
+customers,city,VARCHAR,"City of residence",
+customers,country,VARCHAR,"ISO country code (2 letters)",
+customers,postal_code,VARCHAR,"Postal / ZIP code",
+customers,created_at,TIMESTAMP,"Record creation timestamp",
+categories,category_id,INTEGER,"Unique category identifier",
+categories,name,VARCHAR,"Category display name",
+categories,description,TEXT,"Category description text",
+products,product_id,INTEGER,"Unique product identifier",
+products,category_id,INTEGER,"Foreign key to categories",
+products,sku,VARCHAR,"Stock keeping unit (SKU) code",
+products,name,VARCHAR,"Product display name",
+products,description,TEXT,"Marketing copy for the product",
+products,price,NUMERIC,"Unit price in USD. PECULIAR: NUMERIC(10,2) but no CHECK constraint so negative prices are possible.",
+products,currency,VARCHAR,"ISO currency code, defaults to USD",
+products,stock_quantity,INTEGER,"Available stock units",
+products,is_active,BOOLEAN,"Soft-delete flag. PECULIAR: inactive products are hidden not deleted.",
+products,created_at,TIMESTAMP,"Record creation timestamp",
+orders,order_id,INTEGER,"Unique order identifier",
+orders,customer_id,INTEGER,"Foreign key to customers (the buyer)",Sensitive.CustomerIdentifier
+orders,order_date,TIMESTAMP,"Order placement timestamp",
+orders,status,VARCHAR,"PECULIAR: free-text lowercase status (pending/processing/shipped/completed/cancelled) with no enum or FK constraint",
+orders,subtotal,NUMERIC,"Subtotal before tax and shipping",
+orders,tax,NUMERIC,"Tax amount",
+orders,shipping,NUMERIC,"Shipping charge",
+orders,total_amount,NUMERIC,"Derived total = subtotal + tax + shipping. PECULIAR: should never be edited directly but nothing enforces this.",
+orders,shipping_address,TEXT,"Free-text PII: customer shipping address",Sensitive.Address
+orders,created_at,TIMESTAMP,"Record creation timestamp",
+order_items,order_item_id,INTEGER,"Unique line item identifier",
+order_items,order_id,INTEGER,"Foreign key to orders",
+order_items,product_id,INTEGER,"Foreign key to products",
+order_items,quantity,INTEGER,"Quantity ordered",
+order_items,unit_price,NUMERIC,"Unit price at time of order",
+order_items,discount,NUMERIC,"PECULIAR: discount is an AMOUNT not a percentage, and defaults to 0",
+payments,payment_id,INTEGER,"Unique payment identifier",
+payments,order_id,INTEGER,"Foreign key to orders",
+payments,payment_method,VARCHAR,"PECULIAR: legacy enum stored as text (credit_card/paypal/gift_card) with no FK",
+payments,amount,NUMERIC,"Monetary amount. PECULIAR: negative amounts represent refunds in the same column.",
+payments,currency,VARCHAR,"ISO currency code",
+payments,card_number,VARCHAR,"PECULIAR: RAW PAN (Primary Account Number) stored in cleartext. Must be classified PII/PaymentCard and tokenized.",Sensitive.PaymentCard
+payments,status,VARCHAR,"Payment status (completed/authorized)",
+payments,paid_at,TIMESTAMP,"Payment completion timestamp",
+inventory,inventory_id,INTEGER,"Unique inventory record identifier",
+inventory,product_id,INTEGER,"Foreign key to products",
+inventory,warehouse_code,VARCHAR,"PECULIAR: only WH-EAST and WH-WEST are valid but there is no FK or CHECK constraint",
+inventory,quantity_on_hand,INTEGER,"Units currently in stock",
+inventory,reorder_level,INTEGER,"Threshold that triggers a reorder",
+inventory,updated_at,TIMESTAMP,"Last inventory update timestamp",
+reviews,review_id,INTEGER,"Unique review identifier",
+reviews,product_id,INTEGER,"Foreign key to products",
+reviews,customer_id,INTEGER,"Foreign key to customers",Sensitive.CustomerIdentifier
+reviews,rating,INTEGER,"PECULIAR: intended 1-5 scale but there is no CHECK constraint, so values above 5 have been observed",
+reviews,comment,TEXT,"Free-text review body",
+reviews,created_at,TIMESTAMP,"Review creation timestamp",

@@ -70,6 +70,25 @@ export function StatCard({
   return <div className="card stat-card">{inner}</div>;
 }
 
+/**
+ * Compact display for long FQNs like `svc.db.schema.table.column`:
+ * the meaningful tail (table / table.column) is emphasized and the
+ * service path is de-emphasized; the full FQN is available on hover.
+ */
+export function EntityName({ fqn, tail = 2 }: { fqn: string; tail?: number }) {
+  const parts = fqn.split(".");
+  // Tables have 4 parts (svc.db.schema.table); columns have 5+.
+  const keep = parts.length >= 5 ? tail : 1;
+  const head = parts.slice(0, -keep).join(".");
+  const name = parts.slice(-keep).join(".");
+  return (
+    <span className="entity-name" title={fqn}>
+      <span className="entity-tail">{name}</span>
+      {head && <span className="entity-head">{head}</span>}
+    </span>
+  );
+}
+
 export function Loading() {
   return (
     <div className="loading">

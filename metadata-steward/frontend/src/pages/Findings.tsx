@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api";
-import { EmptyState, Loading, SeverityBadge, StatusBadge } from "../components/ui";
+import { EmptyState, EntityName, Loading, SeverityBadge, StatusBadge } from "../components/ui";
 import { findingLabel, fmtDate } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 import type { Finding } from "../types";
@@ -90,7 +90,9 @@ export default function Findings() {
                     <SeverityBadge severity={f.severity} />
                   </td>
                   <td style={{ fontWeight: 600 }}>{findingLabel(f.type)}</td>
-                  <td className="mono">{f.entity}</td>
+                  <td>
+                    <EntityName fqn={f.entity} />
+                  </td>
                   <td>{f.domain ?? <span className="muted">—</span>}</td>
                   <td>
                     <StatusBadge status={f.status} />
